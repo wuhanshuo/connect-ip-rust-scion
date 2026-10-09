@@ -8,8 +8,11 @@ use scion_proto::path::policy::acl::AclPolicy;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::snap_auth::SnapAuth;
+
 pub const DEFAULT_TUN_NAME: &str = "tun0";
 pub const DEFAULT_TUN_MTU: u16 = 1500;
+pub const DEFAULT_METRICS_ADDRESS: &str = "127.0.0.1:9001";
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -47,6 +50,19 @@ pub struct ProxyOpt {
     #[clap(long = "snap-token", value_name = "FILE")]
     snap_token_path: Option<PathBuf>,
 
+    /// Path to a file with an Anapaya API key, exchanged for SNAP tokens at the AA service.
+    /// Alternative to --snap-token for long-running deployments (tokens are refreshed automatically).
+    #[clap(long = "api-key", value_name = "FILE", conflicts_with = "snap_token_path")]
+    api_key_path: Option<PathBuf>,
+
+    /// Base URL of the Anapaya AA service (required with --api-key)
+    #[clap(long = "aa-url")]
+    aa_url: Option<Url>,
+
+    /// Device ID presented to the AA service (default: hostname)
+    #[clap(long = "device-id")]
+    device_id: Option<String>,
+
     /// ACL policy to filter SCION paths
     #[clap(long = "acl", allow_hyphen_values = true)]
     acl: Option<AclPolicy>,
@@ -74,6 +90,10 @@ pub struct ProxyOpt {
     /// MTU for the interface
     #[clap(long)]
     mtu: Option<u16>,
+
+    /// Address of the Prometheus metrics listener (default: 127.0.0.1:9000)
+    #[clap(long = "metrics-addr")]
+    metrics_address: Option<std::net::SocketAddr>,
 
     /// Tracing level (trace, debug, info, warn, error)
     #[clap(long = "log")]
@@ -105,6 +125,19 @@ pub struct ClientOpt {
     /// Path to the Snap token file for authentication with the endhost API
     #[clap(long = "snap-token", value_name = "FILE")]
     snap_token_path: Option<PathBuf>,
+
+    /// Path to a file with an Anapaya API key, exchanged for SNAP tokens at the AA service.
+    /// Alternative to --snap-token for long-running deployments (tokens are refreshed automatically).
+    #[clap(long = "api-key", value_name = "FILE", conflicts_with = "snap_token_path")]
+    api_key_path: Option<PathBuf>,
+
+    /// Base URL of the Anapaya AA service (required with --api-key)
+    #[clap(long = "aa-url")]
+    aa_url: Option<Url>,
+
+    /// Device ID presented to the AA service (default: hostname)
+    #[clap(long = "device-id")]
+    device_id: Option<String>,
 
     /// ACL policy to filter SCION paths
     #[clap(long = "acl", allow_hyphen_values = true)]
@@ -162,6 +195,15 @@ pub struct ProxyConfigFile {
     /// Path to the Snap token file for authentication with the endhost API
     pub snap_token_path: Option<PathBuf>,
 
+    /// Path to a file with an Anapaya API key, exchanged for SNAP tokens at the AA service
+    pub api_key_path: Option<PathBuf>,
+
+    /// Base URL of the Anapaya AA service (required with api_key_path)
+    pub aa_url: Option<String>,
+
+    /// Device ID presented to the AA service (default: hostname)
+    pub device_id: Option<String>,
+
     /// ACL policy to filter SCION paths
     pub acl_policy: Option<String>,
 
@@ -189,6 +231,9 @@ pub struct ProxyConfigFile {
     /// Clients with configured static addresses
     pub configured_clients: Option<Vec<ConfiguredClient>>,
 
+    /// Address of the Prometheus metrics listener (default: 127.0.0.1:9000)
+    pub metrics_address: Option<String>,
+
     /// Tracing level (trace, debug, info, warn, error)
     pub log_level: Option<String>,
 }
@@ -210,6 +255,15 @@ pub struct ClientConfigFile {
 
     /// Path to the Snap token file for authentication with the endhost API
     pub snap_token_path: Option<PathBuf>,
+
+    /// Path to a file with an Anapaya API key, exchanged for SNAP tokens at the AA service
+    pub api_key_path: Option<PathBuf>,
+
+    /// Base URL of the Anapaya AA service (required with api_key_path)
+    pub aa_url: Option<String>,
+
+    /// Device ID presented to the AA service (default: hostname)
+    pub device_id: Option<String>,
 
     /// ACL policy to filter SCION paths
     pub acl_policy: Option<String>,
@@ -237,6 +291,48 @@ pub struct ClientConfigFile {
 
     /// Tracing level (trace, debug, info, warn, error)
     pub log_level: Option<String>,
+}
+
+/// SNAP authentication options as given in a config file.
+type FileSnapAuth = (
+    Option<PathBuf>,
+    Option<PathBuf>,
+    Option<String>,
+    Option<String>,
+);
+
+/// Merges the SNAP authentication options from the command line and the config file.
+/// Command line values take precedence over config file values.
+fn combine_snap_auth(
+    cli_snap_token_path: Option<PathBuf>,
+    cli_api_key_path: Option<PathBuf>,
+    cli_aa_url: Option<Url>,
+    cli_device_id: Option<String>,
+    file: Option<FileSnapAuth>,
+) -> anyhow::Result<SnapAuth> {
+    let (file_snap_token_path, file_api_key_path, file_aa_url, file_device_id) =
+        file.unwrap_or_default();
+
+    // An authentication method given on the command line replaces the one from the config file.
+    let cli_has_auth = cli_snap_token_path.is_some() || cli_api_key_path.is_some();
+    let (snap_token_path, api_key_path) = if cli_has_auth {
+        (cli_snap_token_path, cli_api_key_path)
+    } else {
+        (file_snap_token_path, file_api_key_path)
+    };
+
+    let aa_url = match cli_aa_url {
+        Some(url) => Some(url),
+        None => file_aa_url
+            .map(|s| {
+                s.parse()
+                    .map_err(|e| anyhow::anyhow!("invalid AA URL in config file: {e}"))
+            })
+            .transpose()?,
+    };
+    let device_id = cli_device_id.or(file_device_id);
+
+    SnapAuth::from_config(snap_token_path, api_key_path, aa_url, device_id)
 }
 
 pub fn load_proxy_config_from_file(path: &PathBuf) -> anyhow::Result<ProxyConfigFile> {
@@ -274,9 +370,20 @@ pub fn combine_proxy_config(
         })
     });
 
-    let snap_token_path = cli_config
-        .snap_token_path
-        .or_else(|| file_config.and_then(|config| config.snap_token_path.clone()));
+    let snap_auth = combine_snap_auth(
+        cli_config.snap_token_path,
+        cli_config.api_key_path,
+        cli_config.aa_url,
+        cli_config.device_id,
+        file_config.map(|config| {
+            (
+                config.snap_token_path.clone(),
+                config.api_key_path.clone(),
+                config.aa_url.clone(),
+                config.device_id.clone(),
+            )
+        }),
+    )?;
 
     let acl_policy = cli_config.acl.or_else(|| {
         file_config.and_then(|config| {
@@ -342,6 +449,22 @@ pub fn combine_proxy_config(
         .or_else(|| file_config.and_then(|config| config.mtu))
         .unwrap_or(DEFAULT_TUN_MTU);
 
+    let metrics_address = match cli_config.metrics_address {
+        Some(address) => address,
+        None => file_config
+            .and_then(|config| config.metrics_address.as_ref())
+            .map(|s| {
+                s.parse()
+                    .map_err(|e| anyhow::anyhow!("invalid metrics address in config file: {e}"))
+            })
+            .transpose()?
+            .unwrap_or_else(|| {
+                DEFAULT_METRICS_ADDRESS
+                    .parse()
+                    .expect("default metrics address is valid")
+            }),
+    };
+
     let log_level = cli_config
         .log_level
         .or_else(|| {
@@ -355,7 +478,7 @@ pub fn combine_proxy_config(
         crate::proxy::ProxyConfig {
             listen,
             endhost_api_address,
-            snap_token_path,
+            snap_auth,
             acl_policy,
             ca_cert_path,
             cert_path,
@@ -364,6 +487,7 @@ pub fn combine_proxy_config(
             address_pool,
             configured_clients: Arc::new(configured_clients),
             tun_mtu: mtu,
+            metrics_address,
         },
         log_level,
     ))
@@ -418,9 +542,20 @@ pub fn combine_client_config(
         })
     });
 
-    let snap_token_path = cli_config
-        .snap_token_path
-        .or_else(|| file_config.and_then(|config| config.snap_token_path.clone()));
+    let snap_auth = combine_snap_auth(
+        cli_config.snap_token_path,
+        cli_config.api_key_path,
+        cli_config.aa_url,
+        cli_config.device_id,
+        file_config.map(|config| {
+            (
+                config.snap_token_path.clone(),
+                config.api_key_path.clone(),
+                config.aa_url.clone(),
+                config.device_id.clone(),
+            )
+        }),
+    )?;
 
     let acl_policy = cli_config.acl.or_else(|| {
         file_config.and_then(|config| {
@@ -484,7 +619,7 @@ pub fn combine_client_config(
             remote,
             host,
             endhost_api_address,
-            snap_token_path,
+            snap_auth,
             acl_policy,
             ca_cert_path,
             cert_path,
@@ -496,4 +631,60 @@ pub fn combine_client_config(
         },
         log_level,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn proxy_opt(extra_args: &[&str]) -> ProxyOpt {
+        let mut args = vec![
+            "connect-ip-rust-scion",
+            "proxy",
+            "--listen",
+            "[0-0,127.0.0.1]:4433",
+            "--ca-cert",
+            "ca.pem",
+            "--cert",
+            "cert.pem",
+            "--key",
+            "key.pem",
+        ];
+        args.extend_from_slice(extra_args);
+        match Cli::try_parse_from(args).unwrap().command {
+            Command::Proxy(opt) => opt,
+            Command::Client(_) => unreachable!(),
+        }
+    }
+
+    fn proxy_file(metrics_address: Option<&str>) -> ProxyConfigFile {
+        serde_json::from_value(serde_json::json!({ "metrics_address": metrics_address })).unwrap()
+    }
+
+    #[test]
+    fn metrics_address_defaults_to_upstream_value() {
+        let (config, _) = combine_proxy_config(proxy_opt(&[]), None).unwrap();
+        assert_eq!(config.metrics_address.to_string(), DEFAULT_METRICS_ADDRESS);
+    }
+
+    #[test]
+    fn metrics_address_from_config_file() {
+        let file = proxy_file(Some("127.0.0.1:9001"));
+        let (config, _) = combine_proxy_config(proxy_opt(&[]), Some(file)).unwrap();
+        assert_eq!(config.metrics_address.to_string(), "127.0.0.1:9001");
+    }
+
+    #[test]
+    fn metrics_address_cli_overrides_config_file() {
+        let file = proxy_file(Some("127.0.0.1:9001"));
+        let opt = proxy_opt(&["--metrics-addr", "127.0.0.1:9002"]);
+        let (config, _) = combine_proxy_config(opt, Some(file)).unwrap();
+        assert_eq!(config.metrics_address.to_string(), "127.0.0.1:9002");
+    }
+
+    #[test]
+    fn invalid_metrics_address_in_config_file_is_an_error() {
+        let file = proxy_file(Some("not-an-address"));
+        assert!(combine_proxy_config(proxy_opt(&[]), Some(file)).is_err());
+    }
 }

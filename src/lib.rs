@@ -3,3 +3,4 @@ pub mod config;
 pub mod connect_ip;
 pub mod net;
 pub mod proxy;
+pub mod snap_auth;

@@ -1,6 +1,5 @@
 pub mod connection;
 
-use std::fs;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
@@ -15,6 +14,7 @@ use tracing::{debug, error, info, trace};
 use crate::client::connection::{Config, Connection};
 use crate::net::UdpPacket;
 use crate::net::quic::MAX_DATAGRAM_SIZE;
+use crate::snap_auth::SnapAuth;
 
 pub const CHANNEL_CAPACITY: usize = 100;
 pub const UDP_PACKET_BUFFER_SIZE: usize = 65535;
@@ -25,7 +25,7 @@ pub struct ClientConfig {
     pub remote: scion_proto::address::SocketAddr,
     pub host: Option<String>,
     pub endhost_api_address: Option<url::Url>,
-    pub snap_token_path: Option<std::path::PathBuf>,
+    pub snap_auth: SnapAuth,
     pub acl_policy: Option<AclPolicy>,
     pub ca_cert_path: std::path::PathBuf,
     pub cert_path: std::path::PathBuf,
@@ -153,17 +153,10 @@ impl Client {
                 "endhost API address must be provided when using SCION (with --endhost-api)",
             )?;
 
-            let mut builder = ScionStackBuilder::new(endhost_api_url);
-            if let Some(token_path) = &self.config.snap_token_path {
-                let snap_token = fs::read_to_string(token_path)
-                    .with_context(|| format!("failed to read token file {:?}", token_path))?
-                    .trim()
-                    .to_string();
-                if snap_token.is_empty() {
-                    anyhow::bail!("token file {:?} is empty", token_path);
-                }
-                builder = builder.with_auth_token(snap_token);
-            }
+            let builder = self
+                .config
+                .snap_auth
+                .apply(ScionStackBuilder::new(endhost_api_url))?;
             let client_network_stack = builder.build().await?;
 
             // Get the available local ISD-ASNs

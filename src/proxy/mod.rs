@@ -1,7 +1,6 @@
 pub mod connection;
 
 use std::collections::HashMap;
-use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -23,6 +22,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::net::quic::MAX_DATAGRAM_SIZE;
 use crate::net::{UdpPacket, return_subnet};
 use crate::proxy::connection::{Config, Connection};
+use crate::snap_auth::SnapAuth;
 
 const TOKEN_PREFIX: &[u8] = b"connect-ip-rust-scion";
 const HMAC_TAG_LEN: usize = 32;
@@ -46,7 +46,7 @@ pub struct ActiveKnownClient {
 pub struct ProxyConfig {
     pub listen: scion_proto::address::SocketAddr,
     pub endhost_api_address: Option<url::Url>,
-    pub snap_token_path: Option<std::path::PathBuf>,
+    pub snap_auth: SnapAuth,
     pub acl_policy: Option<AclPolicy>,
     pub ca_cert_path: std::path::PathBuf,
     pub cert_path: std::path::PathBuf,
@@ -55,6 +55,7 @@ pub struct ProxyConfig {
     pub address_pool: Vec<IpNet>,
     pub configured_clients: Arc<HashMap<String, IpNet>>,
     pub tun_mtu: u16,
+    pub metrics_address: SocketAddr,
 }
 
 pub struct Proxy {
@@ -102,13 +103,14 @@ impl Proxy {
 
         let builder = PrometheusBuilder::new();
         builder
-            .with_http_listener(
-                "127.0.0.1:9000"
-                    .parse::<std::net::SocketAddr>()
-                    .expect("invalid socket address"),
-            )
+            .with_http_listener(self.config.metrics_address)
             .install()
-            .expect("failed to install Prometheus recorder");
+            .with_context(|| {
+                format!(
+                    "failed to install Prometheus recorder on {}",
+                    self.config.metrics_address
+                )
+            })?;
         describe_gauge!("active_connections", "Number of active connections");
         describe_counter!("total_connections", "Total number of connections handled");
         describe_counter!("total_packets_received", "Total number of packets received");
@@ -159,17 +161,10 @@ impl Proxy {
                 "endhost API address must be provided when using SCION (with --endhost-api)",
             )?;
 
-            let mut builder = ScionStackBuilder::new(endhost_api_url);
-            if let Some(token_path) = &self.config.snap_token_path {
-                let snap_token = fs::read_to_string(token_path)
-                    .with_context(|| format!("failed to read token file {:?}", token_path))?
-                    .trim()
-                    .to_string();
-                if snap_token.is_empty() {
-                    anyhow::bail!("token file {:?} is empty", token_path);
-                }
-                builder = builder.with_auth_token(snap_token);
-            }
+            let builder = self
+                .config
+                .snap_auth
+                .apply(ScionStackBuilder::new(endhost_api_url))?;
             let scion_network_stack = builder
                 .build()
                 .in_current_span()
