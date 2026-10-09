@@ -59,7 +59,7 @@ The following shows a minimal config file for the proxy (`proxy-config.json`):
 
 This config file assumes that all certificates and the key are located in `/etc/cirs/`. The `listen` field specifies the address that the proxy will listen on for incoming connections from clients. It must be of the form `[ISD-AS,IP]:Port`. The `endhost_api_address` field specifies the address of the Endhost API that the proxy will use to fetch routes and addresses. The `configured_clients` field allows for pre-configuring specific clients with a fixed IP address. In this example, a client with the Common Name "CIRS-Client" will always be assigned the IP address `10.248.1.128`. (The mentioned certificate generation script can be used to create a client certificate with the appropriate CN). The `address_pool` field specifies an IP subnet from which the proxy will assign an address to clients in case they are not pre-configured.
 
-The proxy exposes Prometheus metrics on `127.0.0.1:9000` by default. If that port is already in use on the host, set another address with the optional `metrics_address` field (e.g. `"metrics_address": "127.0.0.1:9001"`) or the `--metrics-addr` command line option.
+The proxy exposes Prometheus metrics on `127.0.0.1:9001` by default. If that port is already in use on the host, set another address with the optional `metrics_address` field (e.g. `"metrics_address": "127.0.0.1:9002"`) or the `--metrics-addr` command line option.
 
 ### Client
 The client can be configured using command line arguments or a config file. 

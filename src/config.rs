@@ -91,7 +91,7 @@ pub struct ProxyOpt {
     #[clap(long)]
     mtu: Option<u16>,
 
-    /// Address of the Prometheus metrics listener (default: 127.0.0.1:9000)
+    /// Address of the Prometheus metrics listener (default: 127.0.0.1:9001)
     #[clap(long = "metrics-addr")]
     metrics_address: Option<std::net::SocketAddr>,
 
@@ -231,7 +231,7 @@ pub struct ProxyConfigFile {
     /// Clients with configured static addresses
     pub configured_clients: Option<Vec<ConfiguredClient>>,
 
-    /// Address of the Prometheus metrics listener (default: 127.0.0.1:9000)
+    /// Address of the Prometheus metrics listener (default: 127.0.0.1:9001)
     pub metrics_address: Option<String>,
 
     /// Tracing level (trace, debug, info, warn, error)
@@ -662,21 +662,21 @@ mod tests {
     }
 
     #[test]
-    fn metrics_address_defaults_to_upstream_value() {
+    fn metrics_address_defaults_without_config() {
         let (config, _) = combine_proxy_config(proxy_opt(&[]), None).unwrap();
         assert_eq!(config.metrics_address.to_string(), DEFAULT_METRICS_ADDRESS);
     }
 
     #[test]
     fn metrics_address_from_config_file() {
-        let file = proxy_file(Some("127.0.0.1:9001"));
+        let file = proxy_file(Some("127.0.0.1:9003"));
         let (config, _) = combine_proxy_config(proxy_opt(&[]), Some(file)).unwrap();
-        assert_eq!(config.metrics_address.to_string(), "127.0.0.1:9001");
+        assert_eq!(config.metrics_address.to_string(), "127.0.0.1:9003");
     }
 
     #[test]
     fn metrics_address_cli_overrides_config_file() {
-        let file = proxy_file(Some("127.0.0.1:9001"));
+        let file = proxy_file(Some("127.0.0.1:9003"));
         let opt = proxy_opt(&["--metrics-addr", "127.0.0.1:9002"]);
         let (config, _) = combine_proxy_config(opt, Some(file)).unwrap();
         assert_eq!(config.metrics_address.to_string(), "127.0.0.1:9002");
