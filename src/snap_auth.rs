@@ -192,33 +192,15 @@ async fn fetch_snap_token(
     })
 }
 
-/// Reads the API key secret from a file.
-///
-/// The file may contain either just the secret, or the credentials as handed out by Anapaya:
-/// ```text
-/// key_id: "..."
-/// key_secret: "aakey_..."
-/// ```
+/// Reads the API key secret (`aakey_...`) from a file that contains only the secret.
 fn read_api_key(path: &Path) -> Result<String> {
     let content =
         fs::read_to_string(path).with_context(|| format!("failed to read API key file {:?}", path))?;
-    let key = parse_api_key(&content);
+    let key = content.trim();
     if key.is_empty() {
         bail!("API key file {:?} does not contain an API key", path);
     }
-    Ok(key)
-}
-
-fn parse_api_key(content: &str) -> String {
-    match content.find("key_secret") {
-        Some(pos) => content[pos + "key_secret".len()..]
-            .trim_start_matches([':', '=', ' ', '\t', '"'])
-            .split(|c: char| c == '"' || c == ',' || c == '}' || c.is_whitespace())
-            .next()
-            .unwrap_or_default()
-            .to_string(),
-        None => content.trim().to_string(),
-    }
+    Ok(key.to_string())
 }
 
 /// Returns the full URL of the `AuthenticateByKey` method for the given AA base URL.
@@ -282,16 +264,13 @@ mod tests {
     }
 
     #[test]
-    fn parses_raw_api_key() {
-        assert_eq!(parse_api_key("  aakey_secret\n"), "aakey_secret");
-    }
-
-    #[test]
-    fn parses_anapaya_credentials_format() {
-        let content = "{\n  key_id: \"id123\"\n  key_secret: \"aakey_secret\"\n}\n";
-        assert_eq!(parse_api_key(content), "aakey_secret");
-        let content = "{ key_id: \"id123\" key_secret: \"aakey_secret\" }";
-        assert_eq!(parse_api_key(content), "aakey_secret");
+    fn reads_api_key_file() {
+        let path = std::env::temp_dir().join(format!("cirs-api-key-test-{}", std::process::id()));
+        fs::write(&path, "  aakey_secret\n").unwrap();
+        assert_eq!(read_api_key(&path).unwrap(), "aakey_secret");
+        fs::write(&path, " \n").unwrap();
+        assert!(read_api_key(&path).is_err());
+        fs::remove_file(&path).unwrap();
     }
 
     #[test]

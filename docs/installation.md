@@ -90,7 +90,7 @@ SNAP tokens are short-lived. For long-running deployments, an Anapaya API key ca
     "aa_url": "https://AA_SERVICE_ADDRESS",
     "device_id": "wew-client-1",
 ```
-The API key file contains either just the key secret (`aakey_...`) or the credentials as handed out by Anapaya (`key_id: "..."` / `key_secret: "..."`). `device_id` identifies the endpoint to the AA service and defaults to the hostname; set it explicitly when running in a container, as the container hostname changes. `snap_token_path` and `api_key_path` are mutually exclusive. The same options (`--api-key`, `--aa-url`, `--device-id`) are available on the command line and for the proxy.
+The API key file contains only the key secret (`aakey_...`); surrounding whitespace is ignored. `device_id` identifies the endpoint to the AA service and defaults to the hostname; set it explicitly when running in a container, as the container hostname changes. `snap_token_path` and `api_key_path` are mutually exclusive. The same options (`--api-key`, `--aa-url`, `--device-id`) are available on the command line and for the proxy.
 
 
 ## Usage
